@@ -699,7 +699,7 @@ async def handle_topic(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         for i, (filename, _) in enumerate(filenames_and_texts):
             audio_data = audio_results[i]
-            if not isinstance(audio_data, Exception) and audio_
+            if not isinstance(audio_data, Exception) and audio_data:
                 audio_buffer = BytesIO(audio_data)
                 audio_buffer.name = filename
                 narration_files.append((filename, audio_buffer))
