@@ -658,46 +658,40 @@ async def handle_topic(update: Update, context: ContextTypes.DEFAULT_TYPE):
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         safe_topic = safe_filename(topic)
         
+        # === Create HTML document ===
         await update_progress(2, "📄 Creating HTML document...")
-        html_filename, html_content = create_html_document(topic, content, timestamp)
-        html_file = BytesIO(html_content.encode('utf-8'))
-        html_file.name = html_filename
-        await update.message.reply_document(document=html_file, filename=html_filename)
+        html_filename, html_content = create_html_document(topic, content, timestamp)  # ADD THIS LINE
         
-        await update_progress(3, "🎵 Generating TTS for collocations...")
+        # === Generate TTS for main text and opinion texts using Chirp3 HD voices ===
+        await update_progress(3, "🎧 Generating narration audio...")
         await update.message.chat.send_action(action="record_voice")
-        
-        async def vocab_progress(current, total):
-            if current % 3 == 0:
-                await update_progress(3, f"🎵 Generating TTS... ({current}/{total})")
-        
-        vocab_filename, vocab_content, audio_files = await create_vocabulary_file_with_tts(
-            content['collocations'], safe_topic, progress_callback=vocab_progress
-        )
-        
-        # Step: Generate TTS for the 4 main texts using random Chirp voices
-        await update_progress(4, "🎧 Generating narration audio...")
-        await update.message.chat.send_action(action="record_voice")
-        
+
+        CHIRP_VOICES = [
+            "en-US-Chirp3-HD-Achird",
+            "en-US-Chirp3-HD-Callirrhoe",
+            "en-US-Chirp3-HD-Achernar",
+            "en-US-Chirp3-HD-Algenib",
+            "en-US-Chirp3-HD-Erinome",
+            "en-US-Chirp3-HD-Schedar",
+            "en-US-Chirp3-HD-Kore"
+        ]
+
         text_mapping = {
             "Main_Text.mp3": content['main_text'],
             "Positive_Reaction.mp3": content['opinion_texts']['positive'],
             "Critical_Reaction.mp3": content['opinion_texts']['negative'],
             "Balanced_Reaction.mp3": content['opinion_texts']['mixed']
         }
-        
-        selected_voices = random.sample(CHIRP_VOICES, 4)  # pick 4 distinct voices
+
+        selected_voices = random.sample(CHIRP_VOICES, 4)
         audio_tasks = []
-        filenames_and_texts = list(text_mapping.items())
-        
-        for i, (filename, text) in enumerate(filenames_and_texts):
+        for i, (filename, text) in enumerate(text_mapping.items()):
             voice = selected_voices[i]
             audio_tasks.append(generate_tts_async(text, voice))
-        
+
         audio_results = await asyncio.gather(*audio_tasks, return_exceptions=True)
         narration_files = []
-        
-        for i, (filename, _) in enumerate(filenames_and_texts):
+        for i, (filename, _) in enumerate(text_mapping.items()):
             audio_data = audio_results[i]
             if not isinstance(audio_data, Exception) and audio_data:
                 audio_buffer = BytesIO(audio_data)
@@ -705,31 +699,74 @@ async def handle_topic(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 narration_files.append((filename, audio_buffer))
             else:
                 print(f"TTS failed for {filename}: {audio_data}")
-        
-        # Step: Send ZIP (unchanged)
-        await update_progress(5, "📤 Sending package...")
+
+        # === Generate Anki vocabulary file (with Standard-C voice) ===
+        async def vocab_progress(current, total):
+            if current % 3 == 0:
+                await update_progress(4, f"🎵 Generating TTS for collocations... ({current}/{total})")  # CHANGED TO STEP 4
+
+        vocab_filename, vocab_content, audio_files = await create_vocabulary_file_with_tts(
+            content['collocations'], safe_topic, progress_callback=vocab_progress
+        )
+
+        # === Create ZIP package (for Anki media folder) ===
+        await update_progress(5, "📦 Creating ZIP package...")  # CHANGED TO STEP 5
         zip_filename, zip_buffer = create_zip_package(
             vocab_filename, vocab_content, audio_files, html_filename, html_content, topic, timestamp
         )
-        zip_file_obj = BytesIO(zip_buffer.getvalue())
-        zip_file_obj.name = zip_filename
-        await update.message.reply_document(document=zip_file_obj, filename=zip_filename)
-        
-        # Send Anki .txt separately
-        anki_file = BytesIO(vocab_content.encode('utf-8'))
-        anki_file.name = "anki_import.txt"
-        await update.message.reply_document(document=anki_file, filename="anki_import.txt")
-        
-        # Send each narration MP3
+
+        # === 1. Send HTML document first ===
+        html_file = BytesIO(html_content.encode('utf-8'))
+        html_file.name = html_filename
+        await update.message.reply_document(
+            document=html_file,
+            filename=html_filename,
+            caption="📄 Open this doc to see your topic texts and vocab list"
+        )
+
+        # === 2. Instructional message ===
+        await update.message.reply_text(
+            "👆 You can listen to the texts from the doc by playing the audio below 👇"
+        )
+
+        # === 3. Send narration audio files ===
         if narration_files:
-            await update.message.reply_text("🎧 Listen to the texts:")
             for filename, audio_buffer in narration_files:
                 await update.message.reply_audio(audio=audio_buffer, filename=filename)
+        else:
+            await update.message.reply_text("⚠️ Could not generate narration audio.")
+
+        # === 4. Emoji gap ===
+        await update.message.reply_text("••• 💭 •••")
+
+        # === 5. Anki instructions ===
+        await update.message.reply_text(
+            "📇 If you're an Anki user, import the text doc below into Anki, "
+            "and put the audio files from the ZIP folder into your Anki `collection.media` folder."
+        )
+
+        # === 6. Send Anki .txt file ===
+        anki_file = BytesIO(vocab_content.encode('utf-8'))
+        anki_file.name = "anki_import.txt"
+        await update.message.reply_document(
+            document=anki_file,
+            filename="anki_import.txt"
+        )
+
+        # === 7. Send ZIP package ===
+        zip_file_obj = BytesIO(zip_buffer.getvalue())
+        zip_file_obj.name = zip_filename
+        await update.message.reply_document(
+            document=zip_file_obj,
+            filename=zip_filename
+        )
         
     except Exception as e:
         error_msg = f"❌ Unexpected error: {str(e)[:200]}"
         print(f"[Bot] Full error: {e}")
         await update.message.reply_text(error_msg)
+        
+    
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
