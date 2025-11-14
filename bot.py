@@ -16,6 +16,8 @@ import asyncio
 from io import BytesIO
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 import logging
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
 
 # Configure logging
 logging.basicConfig(
@@ -44,6 +46,7 @@ class Config:
     RATE_LIMIT_REQUESTS = 5
     RATE_LIMIT_WINDOW = 3600
     MAX_FILE_SIZE = 50 * 1024 * 1024
+    TRACKING_SHEET_ID = os.getenv("TRACKING_SHEET_ID")  # Add this line
 
 config = Config()
 
@@ -51,6 +54,7 @@ deepseek_client = OpenAI(
     api_key=DEEPSEEK_API_KEY,
     base_url="https://api.deepseek.com"
 )
+
 
 class RateLimiter:
     def __init__(self, max_requests=5, window=3600):
@@ -86,7 +90,48 @@ def get_google_tts_client():
         scopes=["https://www.googleapis.com/auth/cloud-platform"]
     )
     return texttospeech.TextToSpeechClient(credentials=credentials)
+    
+def get_sheets_client():
+    """Initialize Google Sheets client"""
+    credentials_dict = json.loads(GOOGLE_CREDENTIALS_JSON)
+    credentials = service_account.Credentials.from_service_account_info(
+        credentials_dict,
+        scopes=["https://www.googleapis.com/auth/spreadsheets"]
+    )
+    return build('sheets', 'v4', credentials=credentials)
 
+async def track_usage_google_sheets(user_id, username, first_name, last_name, topic):
+    """Track student usage in Google Sheets"""
+    try:
+        if not config.TRACKING_SHEET_ID:
+            logger.warning("[Tracking] No TRACKING_SHEET_ID configured, skipping")
+            return
+        
+        sheets_client = get_sheets_client()
+        
+        # Prepare data row
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        full_name = f"{first_name or ''} {last_name or ''}".strip() or "Unknown"
+        
+        row_data = [[
+            timestamp,
+            user_id,
+            username or "No username",
+            full_name,
+            topic[:50]  # Truncate long topics
+        ]]
+        
+        # Append to sheet
+        sheets_client.spreadsheets().values().append(
+            spreadsheetId=config.TRACKING_SHEET_ID,
+            range="A:E",  # Simplified - targets first sheet columns A-E
+            valueInputOption="RAW",
+            body={"values": row_data}
+        ).execute()
+        
+        logger.info(f"[Tracking] ✅ Logged to Google Sheets: {full_name} ({username}) - '{topic[:30]}'")
+    except Exception as e:
+        logger.error(f"[Tracking] ❌ Failed to log to Google Sheets: {e}")
 def validate_topic(topic):
     topic = re.sub(r'\s+', ' ', topic.strip())
     if re.search(r'[<>"|&;`$()]', topic):
