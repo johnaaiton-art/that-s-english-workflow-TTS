@@ -782,6 +782,17 @@ async def handle_topic(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Invalid topic: {str(e)}\n\nPlease try a different topic.")
         return
 
+    # 🚨 ADD THIS TRACKING CALL RIGHT HERE 🚨
+    user = update.effective_user
+    await track_usage_google_sheets(
+        user_id=user.id,
+        username=user.username,
+        first_name=user.first_name,
+        last_name=user.last_name,
+        topic=topic
+    )
+    
+    # Continue with the rest of your function...
     await update.message.chat.send_action(action="typing")
     progress_msg = await update.message.reply_text(
         f"📚 Materials for your '{topic[:20]}...'...\n\n"
@@ -789,6 +800,7 @@ async def handle_topic(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"⬜⬜⬜⬜⬜\n"
         f"Initializing..."
     )
+   
     
     # Progress tracking
     async def update_progress(step, message):
