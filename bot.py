@@ -96,7 +96,7 @@ def get_sheets_client():
     credentials_dict = json.loads(GOOGLE_CREDENTIALS_JSON)
     credentials = service_account.Credentials.from_service_account_info(
         credentials_dict,
-        scopes=["https://www.googleapis.com/auth/spreadsheets"]
+        scopes=["https://www.googleapis.com/auth/cloud-platform"]
     )
     return build('sheets', 'v4', credentials=credentials)
 
