@@ -304,10 +304,10 @@ Please generate a JSON response with the following structure:
     "mixed": "A natural English response (B2/C1 level, 80-120 words) giving a balanced/mixed reaction to the main topic. Should incorporate some vocabulary from the collocations list naturally."
   }},
   "discussion_questions": [
-    "Question 1 in English (B2/C1 level) - should encourage critical thinking",
-    "Question 2 in English (B2/C1 level) - should encourage personal reflection",
-    "Question 3 in English (B2/C1 level) - should prompt discussion",
-    "Question 4 in English (B2/C1 level) - should be open-ended",
+    "Question 1 in English (B2/C1 level) - should ask about personal preference",
+    "Question 2 in English (B2/C1 level) - should ask about personal experience",
+    "Question 3 in English (B2/C1 level) - should encourage reflection on a comparison",
+    "Question 4 in English (B2/C1 level) - should encourage a prediction",
     "Question 5 in English (B2/C1 level) - should stimulate debate"
   ]
 }}
