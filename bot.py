@@ -145,11 +145,15 @@ def validate_topic(topic):
 def split_text_into_sentences(text, max_length=200):
     sentences = re.split(r'([.!?])\s+', text)
     result = []
-    for i in range(0, len(sentences)-1, 2):
-        if i+1 < len(sentences):
+    i = 0
+    while i < len(sentences):
+        if i + 1 < len(sentences) and sentences[i+1] in '.!?':
             result.append(sentences[i] + sentences[i+1])
+            i += 2
         else:
-            result.append(sentences[i])
+            if sentences[i].strip():
+                result.append(sentences[i])
+            i += 1
     final_result = []
     for sentence in result:
         if len(sentence) > max_length:
