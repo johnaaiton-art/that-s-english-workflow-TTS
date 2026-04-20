@@ -290,7 +290,7 @@ def generate_content_with_deepseek(topic):
 
 Please generate a JSON response with the following structure:
 {{
-  "main_text": "An engaging English text at CEFR B2/weak C1 level about {topic}. Should be 200-250 words long, natural and informative. MUST contain 3-5 phrasal verbs that are either typical for this context OR generically useful. Include the objects with phrasal verbs (e.g., 'pick up a language', 'look after children').",
+  "main_text": "An engaging English text at strong B2 / weak C1 level about {topic}. Should be 200-250 words long, natural and informative. Use mostly clear, direct sentences of moderate length. Avoid dense nominalisation, long embedded clauses, or very advanced C1+ vocabulary. The text should feel accessible to a motivated B2 learner, not like an academic essay. MUST contain 3-5 phrasal verbs that are either typical for this context OR generically useful. Include the objects with phrasal verbs (e.g., 'pick up a language', 'look after children').",
   "collocations": [
     {{"english": "collocation/phrasal verb with object from text", "russian": "Russian translation"}},
     // Exactly 15 items total
@@ -299,9 +299,9 @@ Please generate a JSON response with the following structure:
     // All collocations must come directly from the main_text
   ],
   "opinion_texts": {{
-    "positive": "A natural English response (B2/C1 level, 80-120 words) giving a positive reaction to the main topic. Should incorporate some vocabulary from the collocations list naturally.",
-    "negative": "A natural English response (B2/C1 level, 80-120 words) giving a critical/negative reaction to the main topic. Should incorporate some vocabulary from the collocations list naturally.",
-    "mixed": "A natural English response (B2/C1 level, 80-120 words) giving a balanced/mixed reaction to the main topic. Should incorporate some vocabulary from the collocations list naturally."
+    "positive": "A natural English response (strong B2 level, 80-100 words) that AGREES WITH THE OVERALL IDEA of the topic and adds 1-2 NEW supporting points or examples that were NOT mentioned in the main text. Do NOT just repeat or paraphrase what the main text already said. Use clear, direct sentences. Avoid complex subordinate clauses. Incorporate 1-2 collocations from the list naturally.",
+    "negative": "A natural English response (strong B2 level, 80-100 words) that DISAGREES WITH THE ADVICE OR APPROACH described in the main text and suggests an ALTERNATIVE approach or way of thinking. Do NOT criticise the topic itself (e.g. do not criticise Chinese culture). Criticise the advice given and offer a different perspective. Use clear, direct sentences. Incorporate 1-2 collocations from the list naturally.",
+    "mixed": "A natural English response (strong B2 level, 80-100 words) giving a balanced reaction — acknowledge one strength of the approach described, then raise one genuine concern or limitation. Use clear, direct sentences. Avoid complex subordinate clauses. Incorporate 1-2 collocations from the list naturally."
   }},
   "speaking_questions": [
     {{"question": "Question 1 reacting to a specific idea from the main_text, using 1-2 collocations from the list naturally", "target_expressions": ["collocation used 1", "collocation used 2"]}},
@@ -317,7 +317,8 @@ CRITICAL REQUIREMENTS:
 2. ALL collocations must come from the main_text
 3. The first 3-5 collocations MUST be the phrasal verbs
 4. Remaining collocations should be useful expressions from the text
-5. Opinion texts should naturally use some collocations but sound conversational
+5. Opinion texts: POSITIVE must add NEW points not in main text (not just agree with what was said). NEGATIVE must challenge the ADVICE/APPROACH in the text and suggest alternatives — NOT criticise the topic or subject matter itself. MIXED must acknowledge one strength then one genuine concern.
+5b. All opinion texts: strong B2 level — clear, direct sentences, no dense subordinate clauses, no C1+ academic vocabulary
 6. Speaking questions must each react to a DIFFERENT specific idea/claim from the main_text
 7. Each speaking question uses 1-2 collocations from the list naturally in the question itself
 8. Question patterns (vary across the 5): "Do you agree that [idea from text]?", 
@@ -329,7 +330,7 @@ CRITICAL REQUIREMENTS:
     response = deepseek_client.chat.completions.create(
         model="deepseek-chat",
         messages=[
-            {"role": "system", "content": "You are an expert English language teacher who creates engaging, natural content at CEFR B2/C1 level with a focus on phrasal verbs and useful collocations. Always respond with valid JSON only."},
+            {"role": "system", "content": "You are an expert English language teacher who creates engaging, natural content at strong B2 / weak C1 level with a focus on phrasal verbs and useful collocations. Strong B2 means clear, direct prose that a motivated B2 learner can follow — not dense C1 academic writing. Always respond with valid JSON only."},
             {"role": "user", "content": prompt}
         ],
         temperature=0.7,
