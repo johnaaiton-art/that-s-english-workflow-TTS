@@ -104,6 +104,7 @@ async def track_usage_google_sheets(user_id, username, first_name, last_name, to
 
         sheets_client = get_sheets_client()
 
+        # Prepare data row
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         full_name = f"{first_name or ''} {last_name or ''}".strip() or "Unknown"
 
@@ -112,9 +113,10 @@ async def track_usage_google_sheets(user_id, username, first_name, last_name, to
             user_id,
             username or "No username",
             full_name,
-            topic[:50]
+            topic[:50]  # Truncate long topics
         ]]
 
+        # Append to sheet
         sheets_client.spreadsheets().values().append(
             spreadsheetId=config.TRACKING_SHEET_ID,
             range="A:E",
@@ -139,33 +141,6 @@ def validate_topic(topic):
     if not topic:
         raise ValueError("Topic cannot be empty")
     return topic
-
-def clean_markdown_for_tts(text):
-    """Remove markdown formatting for TTS while keeping content"""
-    text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)
-    text = re.sub(r'\*(.*?)\*', r'\1', text)
-    text = re.sub(r'__(.*?)__', r'\1', text)
-    text = re.sub(r'\[(.*?)\]\(.*?\)', r'\1', text)
-    return text
-
-def apply_html_bold_to_text(text, collocations):
-    """Apply HTML <strong> tags to collocation phrases in the main text"""
-    if not collocations:
-        return text
-
-    # Clean any existing markdown bold from the text first
-    text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)
-
-    # Sort by length (longest first) to avoid partial matches
-    sorted_collocs = sorted(collocations, key=lambda x: len(x['english']), reverse=True)
-
-    result = text
-    for item in sorted_collocs:
-        phrase = item['english']
-        escaped = re.escape(phrase)
-        result = re.sub(r'(?i)(\b' + escaped + r'\b)', r'<strong>\1</strong>', result)
-
-    return result
 
 def split_text_into_sentences(text, max_length=200):
     sentences = re.split(r'([.!?])\s+', text)
@@ -204,10 +179,9 @@ def split_text_into_sentences(text, max_length=200):
 def generate_tts_chirp3_sync(text, voice_name):
     """Generate TTS using Chirp3 HD voices for main texts"""
     try:
-        cleaned_text = clean_markdown_for_tts(text)
-        logger.info(f"[Chirp3 TTS] Generating for voice '{voice_name}', text length: {len(cleaned_text)}")
+        logger.info(f"[Chirp3 TTS] Generating for voice '{voice_name}', text length: {len(text)}")
         client = get_google_tts_client()
-        sentences = split_text_into_sentences(cleaned_text, max_length=200)
+        sentences = split_text_into_sentences(text, max_length=200)
         logger.info(f"[Chirp3 TTS] Split into {len(sentences)} sentences")
 
         all_audio = b""
@@ -242,11 +216,10 @@ def generate_tts_chirp3_sync(text, voice_name):
 def generate_tts_wavenet_sync(text, voice_name="en-US-Wavenet-H"):
     """Generate TTS using Wavenet voices for Anki cards"""
     try:
-        cleaned_text = clean_markdown_for_tts(text)
-        logger.info(f"[Wavenet TTS] Generating for '{cleaned_text[:50]}...' with voice '{voice_name}'")
+        logger.info(f"[Wavenet TTS] Generating for '{text[:50]}...' with voice '{voice_name}'")
         client = get_google_tts_client()
 
-        synthesis_input = texttospeech.SynthesisInput(text=cleaned_text)
+        synthesis_input = texttospeech.SynthesisInput(text=text)
         voice = texttospeech.VoiceSelectionParams(
             language_code="en-US",
             name=voice_name
@@ -263,7 +236,7 @@ def generate_tts_wavenet_sync(text, voice_name="en-US-Wavenet-H"):
         )
 
         audio_size = len(response.audio_content)
-        logger.info(f"[Wavenet TTS] ✅ Success: {audio_size} bytes for '{cleaned_text[:30]}'")
+        logger.info(f"[Wavenet TTS] ✅ Success: {audio_size} bytes for '{text[:30]}'")
         return response.audio_content
     except Exception as e:
         logger.error(f"[Wavenet TTS] ❌ Failed for '{text[:50]}': {type(e).__name__}: {str(e)}")
@@ -317,7 +290,7 @@ def generate_content_with_deepseek(topic):
 
 Please generate a JSON response with the following structure:
 {{
-  "main_text": "An engaging English text at strong B2 / weak C1 level about {topic}. Should be 200-250 words long, natural and informative. Use mostly clear, direct sentences of moderate length. Avoid dense nominalisation, long embedded clauses, or very advanced C1+ vocabulary. The text should feel accessible to a motivated B2 learner, not like an academic essay. MUST contain 3-5 phrasal verbs that are either typical for this context OR generically useful. Include the objects with phrasal verbs (e.g., 'pick up a language', 'look after children'). IMPORTANT: Do NOT use any markdown formatting like **bold** or *italic*. Use plain text only.",
+  "main_text": "An engaging English text at CEFR B2/weak C1 level about {topic}. Should be 200-250 words long, natural and informative. MUST contain 3-5 phrasal verbs that are either typical for this context OR generically useful. Include the objects with phrasal verbs (e.g., 'pick up a language', 'look after children').",
   "collocations": [
     {{"english": "collocation/phrasal verb with object from text", "russian": "Russian translation"}},
     // Exactly 15 items total
@@ -326,9 +299,9 @@ Please generate a JSON response with the following structure:
     // All collocations must come directly from the main_text
   ],
   "opinion_texts": {{
-    "positive": "A natural English response (strong B2 level, 80-100 words) that AGREES WITH THE OVERALL IDEA of the topic and adds 1-2 NEW supporting points or examples that were NOT mentioned in the main text. Do NOT just repeat or paraphrase what the main text already said. Use clear, direct sentences. Avoid complex subordinate clauses. Incorporate 1-2 collocations from the list naturally. IMPORTANT: Do NOT use any markdown formatting like **bold** or *italic*. Use plain text only.",
-    "negative": "A natural English response (strong B2 level, 80-100 words) that DISAGREES WITH THE ADVICE OR APPROACH described in the main text and suggests an ALTERNATIVE approach or way of thinking. Do NOT criticise the topic itself (e.g. do not criticise Chinese culture). Criticise the advice given and offer a different perspective. Use clear, direct sentences. Incorporate 1-2 collocations from the list naturally. IMPORTANT: Do NOT use any markdown formatting like **bold** or *italic*. Use plain text only.",
-    "mixed": "A natural English response (strong B2 level, 80-100 words) giving a balanced reaction — acknowledge one strength of the approach described, then raise one genuine concern or limitation. Use clear, direct sentences. Avoid complex subordinate clauses. Incorporate 1-2 collocations from the list naturally. IMPORTANT: Do NOT use any markdown formatting like **bold** or *italic*. Use plain text only."
+    "positive": "A natural English response (B2/C1 level, 80-120 words) giving a positive reaction to the main topic. Should incorporate some vocabulary from the collocations list naturally.",
+    "negative": "A natural English response (B2/C1 level, 80-120 words) giving a critical/negative reaction to the main topic. Should incorporate some vocabulary from the collocations list naturally.",
+    "mixed": "A natural English response (B2/C1 level, 80-120 words) giving a balanced/mixed reaction to the main topic. Should incorporate some vocabulary from the collocations list naturally."
   }},
   "speaking_questions": [
     {{"question": "Question 1 reacting to a specific idea from the main_text, using 1-2 collocations from the list naturally", "target_expressions": ["collocation used 1", "collocation used 2"]}},
@@ -344,21 +317,19 @@ CRITICAL REQUIREMENTS:
 2. ALL collocations must come from the main_text
 3. The first 3-5 collocations MUST be the phrasal verbs
 4. Remaining collocations should be useful expressions from the text
-5. Opinion texts: POSITIVE must add NEW points not in main text (not just agree with what was said). NEGATIVE must challenge the ADVICE/APPROACH in the text and suggest alternatives — NOT criticise the topic or subject matter itself. MIXED must acknowledge one strength then one genuine concern.
-5b. All opinion texts: strong B2 level — clear, direct sentences, no dense subordinate clauses, no C1+ academic vocabulary
+5. Opinion texts should naturally use some collocations but sound conversational
 6. Speaking questions must each react to a DIFFERENT specific idea/claim from the main_text
 7. Each speaking question uses 1-2 collocations from the list naturally in the question itself
-8. Question patterns (vary across the 5): "Do you agree that [idea from text]?",
+8. Question patterns (vary across the 5): "Do you agree that [idea from text]?", 
    "To what extent is it true that [idea from text]?", "How far has [idea from text] been true in your experience?",
    "Would you say that [idea from text]?", "Is [idea from text] realistic in your view?"
 9. Questions should prompt a reaction to the TEXT's ideas, not tangential topics
-10. Return ONLY valid JSON, no additional text
-11. DO NOT use any markdown formatting like **bold** or *italic* anywhere in the response. Use plain text only."""
+10. Return ONLY valid JSON, no additional text"""
 
     response = deepseek_client.chat.completions.create(
         model="deepseek-chat",
         messages=[
-            {"role": "system", "content": "You are an expert English language teacher who creates engaging, natural content at strong B2 / weak C1 level with a focus on phrasal verbs and useful collocations. Strong B2 means clear, direct prose that a motivated B2 learner can follow — not dense C1 academic writing. Always respond with valid JSON only. IMPORTANT: Never use markdown formatting like **bold** or *italic* in any text. Use plain text only."},
+            {"role": "system", "content": "You are an expert English language teacher who creates engaging, natural content at CEFR B2/C1 level with a focus on phrasal verbs and useful collocations. Always respond with valid JSON only."},
             {"role": "user", "content": prompt}
         ],
         temperature=0.7,
@@ -377,80 +348,8 @@ CRITICAL REQUIREMENTS:
     logger.info(f"[DeepSeek] ✅ Content validated successfully")
     return content
 
-@retry(
-    stop=stop_after_attempt(config.API_RETRY_ATTEMPTS),
-    wait=wait_exponential(multiplier=1, min=4, max=10),
-    retry=retry_if_exception_type((Exception,)),
-    before_sleep=lambda retry_state: logger.warning(f"Retry {retry_state.attempt_number}: {retry_state.outcome.exception()}")
-)
-def generate_definitions_with_deepseek(collocations):
-    """Generate simple B1/B2 level definitions/synonyms for collocations"""
-    english_phrases = [item['english'] for item in collocations]
-    phrases_list = "\n".join(f"{i+1}. {phrase}" for i, phrase in enumerate(english_phrases))
-
-    logger.info(f"[DeepSeek] Generating definitions for {len(english_phrases)} collocations")
-
-    prompt = f"""You are an English teacher creating simple definitions for B1/B2 learners.
-
-For each phrase below, provide a SHORT definition or synonym(s) in simple English (B1/B2 level).
-
-CRITICAL RULES:
-- DO NOT use any word that appears in the target phrase itself
-- Use simpler, more common words
-- If it's a phrasal verb, explain with a single verb or short phrase
-- If it's a collocation, give 1-2 synonyms or a simple explanation
-- Keep each definition under 6 words
-- Examples:
-  "increase prices" → "raise costs"
-  "pick up a language" → "learn to speak it"
-  "look after children" → "take care of kids"
-  "make a decision" → "choose something"
-  "take into account" → "consider, think about"
-  "play a key role" → "be very important"
-  "pose a threat" → "be dangerous for"
-  "strike a balance" → "find middle ground"
-  "face challenges" → "deal with problems"
-
-Phrases to define:
-{phrases_list}
-
-Return ONLY a JSON array of definitions in the same order:
-["definition1", "definition2", ...]
-
-Return ONLY valid JSON, no other text."""
-
-    response = deepseek_client.chat.completions.create(
-        model="deepseek-chat",
-        messages=[
-            {"role": "system", "content": "You create simple B1/B2 English definitions. Always respond with valid JSON array only. Never use words from the target phrase in definitions."},
-            {"role": "user", "content": prompt}
-        ],
-        temperature=0.3,
-        timeout=45.0
-    )
-
-    content_text = response.choices[0].message.content
-
-    json_match = re.search(r'\[.*\]', content_text, re.DOTALL)
-    if json_match:
-        content_text = json_match.group()
-
-    definitions = json.loads(content_text)
-
-    if len(definitions) != len(collocations):
-        logger.warning(f"[DeepSeek] Got {len(definitions)} definitions but expected {len(collocations)}")
-        while len(definitions) < len(collocations):
-            definitions.append("")
-        definitions = definitions[:len(collocations)]
-
-    logger.info(f"[DeepSeek] ✅ Generated {len(definitions)} definitions")
-    return definitions
-
-async def create_vocabulary_file_with_tts(collocations, definitions, topic, progress_callback=None):
-    """Create Anki vocabulary file with Wavenet TTS.
-    4 columns (no header): English | Definition | Russian | [sound:xxx.mp3]
-    File is encoded as UTF-8 with BOM so Anki on Windows reads Cyrillic correctly.
-    """
+async def create_vocabulary_file_with_tts(collocations, topic, progress_callback=None):
+    """Create Anki vocabulary file with Wavenet TTS"""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     safe_topic_name = safe_filename(topic)
     filename = f"{safe_topic_name}_{timestamp}_collocations.txt"
@@ -474,8 +373,6 @@ async def create_vocabulary_file_with_tts(collocations, definitions, topic, prog
 
     for idx, (item, audio_data) in enumerate(zip(collocations, audio_results)):
         english_text = item['english']
-        russian_text = item['russian']
-        definition = definitions[idx] if idx < len(definitions) else ""
 
         if progress_callback:
             await progress_callback(idx + 1, total_items)
@@ -483,20 +380,18 @@ async def create_vocabulary_file_with_tts(collocations, definitions, topic, prog
         if isinstance(audio_data, Exception):
             logger.error(f"[Anki TTS] ❌ Exception for '{english_text}': {type(audio_data).__name__}: {audio_data}")
             failed_count += 1
-            # 4 columns, no TTS tag on failure
-            content += f"{english_text}\t{definition}\t{russian_text}\t\n"
+            content += f"{item['russian']}\t{item['english']}\n"
         elif not audio_data:
             logger.error(f"[Anki TTS] ❌ Empty data for '{english_text}'")
             failed_count += 1
-            content += f"{english_text}\t{definition}\t{russian_text}\t\n"
+            content += f"{item['russian']}\t{item['english']}\n"
         else:
-            hash_object = hashlib.md5(english_text.encode('utf-8'))
+            hash_object = hashlib.md5(english_text.encode())
             audio_filename = f"tts_{hash_object.hexdigest()}.mp3"
             audio_filename = safe_filename(audio_filename)
             audio_files[audio_filename] = audio_data
             anki_tag = f"[sound:{audio_filename}]"
-            # 4 columns: English | Definition | Russian | TTS tag
-            content += f"{english_text}\t{definition}\t{russian_text}\t{anki_tag}\n"
+            content += f"{item['russian']}\t{item['english']}\t{anki_tag}\n"
             success_count += 1
             logger.info(f"[Anki TTS] ✅ {idx+1}/{total_items}: '{english_text[:30]}' -> {audio_filename}")
 
@@ -507,10 +402,8 @@ async def create_vocabulary_file_with_tts(collocations, definitions, topic, prog
 
     return filename, content, audio_files
 
-def create_zip_package(vocab_filename, vocab_content, audio_files, html_filename, html_output, topic, timestamp):
-    """Create ZIP with all files.
-    vocab_content is encoded as UTF-8-sig (BOM) so Anki reads Cyrillic correctly on Windows.
-    """
+def create_zip_package(vocab_filename, vocab_content, audio_files, html_filename, html_content, topic, timestamp):
+    """Create ZIP with all files"""
     safe_topic_name = safe_filename(topic)
     zip_filename = f"{safe_topic_name}_{timestamp}_complete_package.zip"
     zip_buffer = BytesIO()
@@ -519,8 +412,7 @@ def create_zip_package(vocab_filename, vocab_content, audio_files, html_filename
 
     with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
         safe_vocab = safe_filename(vocab_filename)
-        # utf-8-sig = UTF-8 with BOM — Anki and Excel on Windows will detect encoding correctly
-        zip_file.writestr(safe_vocab, vocab_content.encode('utf-8-sig'))
+        zip_file.writestr(safe_vocab, vocab_content.encode('utf-8'))
         logger.info(f"[ZIP] Added vocabulary file: {safe_vocab}")
 
         for audio_filename, audio_data in audio_files.items():
@@ -529,7 +421,7 @@ def create_zip_package(vocab_filename, vocab_content, audio_files, html_filename
         logger.info(f"[ZIP] Added {len(audio_files)} Anki TTS audio files")
 
         safe_html = safe_filename(html_filename)
-        zip_file.writestr(safe_html, html_output.encode('utf-8'))
+        zip_file.writestr(safe_html, html_content.encode('utf-8'))
         logger.info(f"[ZIP] Added HTML file: {safe_html}")
 
     zip_buffer.seek(0)
@@ -541,34 +433,24 @@ def create_zip_package(vocab_filename, vocab_content, audio_files, html_filename
 
     return zip_filename, zip_buffer
 
-def create_html_document(topic, content, timestamp, definitions):
-    """Create HTML document.
-    Table has 4 columns: # | English | Simple definition | Russian
-    Collocations in the main text are bolded via <strong> tags.
-    """
+def create_html_document(topic, content, timestamp):
+    """Create HTML document"""
     safe_topic = safe_filename(topic)
     html_filename = f"{safe_topic}_{timestamp}_materials.html"
 
-    main_text_bolded = apply_html_bold_to_text(content['main_text'], content['collocations'])
-
-    positive_cleaned = clean_markdown_for_tts(content['opinion_texts']['positive'])
-    negative_cleaned = clean_markdown_for_tts(content['opinion_texts']['negative'])
-    mixed_cleaned = clean_markdown_for_tts(content['opinion_texts']['mixed'])
-
-    # Build vocabulary table rows — 4 columns: #, English, Definition, Russian
     vocab_rows = ""
     for i, item in enumerate(content['collocations'], 1):
-        definition = definitions[i-1] if i-1 < len(definitions) else ""
         vocab_rows += f"""
         <tr>
             <td>{i}</td>
             <td class="english">{item['english']}</td>
-            <td class="definition">{definition}</td>
             <td class="russian">{item['russian']}</td>
         </tr>
         """
 
-    html_output = f"""<!DOCTYPE html>
+    questions_html = ""  # speaking questions delivered via bot, not HTML
+
+    html_content = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -639,21 +521,10 @@ def create_html_document(topic, content, timestamp, definitions):
             color: #2c3e50;
             box-shadow: 0 5px 15px rgba(0,0,0,0.1);
         }}
-        .main-text strong {{
-            color: #667eea;
-            background: rgba(102, 126, 234, 0.1);
-            padding: 2px 4px;
-            border-radius: 4px;
-            font-weight: 600;
-        }}
         .english {{
             font-size: 1.1em;
             font-weight: 600;
             color: #2c3e50;
-        }}
-        .definition {{
-            color: #495057;
-            font-size: 0.95em;
         }}
         .russian {{
             color: #7f8c8d;
@@ -717,6 +588,33 @@ def create_html_document(topic, content, timestamp, definitions):
             line-height: 1.8;
             color: #2c3e50;
         }}
+        .question {{
+            background: #f8f9fa;
+            padding: 20px;
+            margin-bottom: 15px;
+            border-radius: 10px;
+            display: flex;
+            gap: 15px;
+            align-items: start;
+            box-shadow: 0 3px 10px rgba(0,0,0,0.05);
+        }}
+        .question-number {{
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            width: 35px;
+            height: 35px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            flex-shrink: 0;
+        }}
+        .question-text {{
+            font-size: 1.05em;
+            line-height: 1.7;
+            color: #2c3e50;
+        }}
         .footer {{
             background: #f8f9fa;
             padding: 30px;
@@ -759,14 +657,13 @@ def create_html_document(topic, content, timestamp, definitions):
             <div class="section">
                 <h2 class="section-title">
                     <span class="section-icon">📚</span>
-                    Collocations &amp; Phrasal Verbs
+                    Collocations & Phrasal Verbs
                 </h2>
                 <table>
                     <thead>
                         <tr>
                             <th>#</th>
                             <th>English</th>
-                            <th>Simple definition / Similar words</th>
                             <th>Russian (Русский)</th>
                         </tr>
                     </thead>
@@ -781,7 +678,7 @@ def create_html_document(topic, content, timestamp, definitions):
                     <span class="section-icon">📖</span>
                     Main Text
                 </h2>
-                <div class="main-text">{main_text_bolded}</div>
+                <div class="main-text">{content['main_text']}</div>
             </div>
             <!-- Opinion Texts -->
             <div class="section">
@@ -794,23 +691,24 @@ def create_html_document(topic, content, timestamp, definitions):
                         <span>😊</span>
                         <span>Positive Reaction</span>
                     </div>
-                    <div class="opinion-text">{positive_cleaned}</div>
+                    <div class="opinion-text">{content['opinion_texts']['positive']}</div>
                 </div>
                 <div class="opinion-card opinion-negative">
                     <div class="opinion-header">
                         <span>🤔</span>
                         <span>Critical Reaction</span>
                     </div>
-                    <div class="opinion-text">{negative_cleaned}</div>
+                    <div class="opinion-text">{content['opinion_texts']['negative']}</div>
                 </div>
                 <div class="opinion-card opinion-mixed">
                     <div class="opinion-header">
                         <span>⚖️</span>
                         <span>Balanced Reaction</span>
                     </div>
-                    <div class="opinion-text">{mixed_cleaned}</div>
+                    <div class="opinion-text">{content['opinion_texts']['mixed']}</div>
                 </div>
             </div>
+            <!-- Speaking practice delivered via /speak command -->
         </div>
         <div class="footer">
             <p>Generated by English Learning Bot 🤖</p>
@@ -821,7 +719,7 @@ def create_html_document(topic, content, timestamp, definitions):
 </html>"""
 
     logger.info(f"[HTML] Created document: {html_filename}")
-    return html_filename, html_output
+    return html_filename, html_content
 
 # Chirp3 HD voices for narration
 CHIRP_VOICES = [
@@ -871,17 +769,17 @@ async def handle_topic(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.chat.send_action(action="typing")
     progress_msg = await update.message.reply_text(
         f"📚 Materials for your '{topic[:20]}...'...\n\n"
-        f"⏳ Progress: 0/6\n"
-        f"⬜⬜⬜⬜⬜⬜\n"
+        f"⏳ Progress: 0/5\n"
+        f"⬜⬜⬜⬜⬜\n"
         f"Initializing..."
     )
 
     async def update_progress(step, message):
-        progress_bar = "🟩" * step + "⬜" * (6 - step)
+        progress_bar = "🟩" * step + "⬜" * (5 - step)
         try:
             await progress_msg.edit_text(
                 f"📚 Materials for your '{topic[:20]}...'...\n\n"
-                f"⏳ Progress: {step}/6\n"
+                f"⏳ Progress: {step}/5\n"
                 f"{progress_bar}\n"
                 f"{message}"
             )
@@ -900,33 +798,21 @@ async def handle_topic(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Failed to generate content. Please try again.")
             return
 
-        await update_progress(2, "📝 Generating B1/B2 definitions...")
-        await update.message.chat.send_action(action="typing")
-
-        logger.info(f"[Bot] Generating definitions for {len(content['collocations'])} collocations")
-        definitions = generate_definitions_with_deepseek(content['collocations'])
-        logger.info(f"[Bot] ✅ Definitions generated: {len(definitions)}")
-
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         safe_topic = safe_filename(topic)
 
-        await update_progress(3, "📄 Creating HTML document...")
-        html_filename, html_output = create_html_document(topic, content, timestamp, definitions)
+        await update_progress(2, "📄 Creating HTML document...")
+        html_filename, html_content = create_html_document(topic, content, timestamp)
         logger.info(f"[Bot] HTML document created: {html_filename}")
 
-        await update_progress(4, "🎧 Generating narration audio (Chirp3 HD)...")
+        await update_progress(3, "🎧 Generating narration audio (Chirp3 HD)...")
         await update.message.chat.send_action(action="record_voice")
 
-        main_text_cleaned = clean_markdown_for_tts(content['main_text'])
-        positive_cleaned = clean_markdown_for_tts(content['opinion_texts']['positive'])
-        negative_cleaned = clean_markdown_for_tts(content['opinion_texts']['negative'])
-        mixed_cleaned = clean_markdown_for_tts(content['opinion_texts']['mixed'])
-
         text_mapping = {
-            "Main_Text.mp3": main_text_cleaned,
-            "Positive_Reaction.mp3": positive_cleaned,
-            "Critical_Reaction.mp3": negative_cleaned,
-            "Balanced_Reaction.mp3": mixed_cleaned
+            "Main_Text.mp3": content['main_text'],
+            "Positive_Reaction.mp3": content['opinion_texts']['positive'],
+            "Critical_Reaction.mp3": content['opinion_texts']['negative'],
+            "Balanced_Reaction.mp3": content['opinion_texts']['mixed']
         }
 
         selected_voices = random.sample(CHIRP_VOICES, 4)
@@ -951,15 +837,15 @@ async def handle_topic(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 logger.error(f"[Bot] ❌ Chirp3 TTS failed for {filename}: {audio_data}")
 
-        await update_progress(5, "🎵 Generating TTS for Anki collocations (Wavenet-H)...")
+        await update_progress(4, "🎵 Generating TTS for Anki collocations (Wavenet-H)...")
         await update.message.chat.send_action(action="record_voice")
 
         async def vocab_progress(current, total):
             if current % 3 == 0:
-                await update_progress(5, f"🎵 Generating Anki TTS... ({current}/{total})")
+                await update_progress(4, f"🎵 Generating Anki TTS... ({current}/{total})")
 
         vocab_filename, vocab_content, audio_files = await create_vocabulary_file_with_tts(
-            content['collocations'], definitions, safe_topic, progress_callback=vocab_progress
+            content['collocations'], safe_topic, progress_callback=vocab_progress
         )
 
         if not audio_files:
@@ -968,14 +854,13 @@ async def handle_topic(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             logger.info(f"[Bot] ✅ Generated {len(audio_files)} Anki TTS files")
 
-        await update_progress(6, "📦 Creating ZIP package...")
+        await update_progress(5, "📦 Creating ZIP package...")
         zip_filename, zip_buffer = create_zip_package(
-            vocab_filename, vocab_content, audio_files, html_filename, html_output, topic, timestamp
+            vocab_filename, vocab_content, audio_files, html_filename, html_content, topic, timestamp
         )
         logger.info(f"[Bot] ZIP package created: {zip_filename}")
 
-        # Send HTML document
-        html_file = BytesIO(html_output.encode('utf-8'))
+        html_file = BytesIO(html_content.encode('utf-8'))
         html_file.name = html_filename
         await update.message.reply_document(
             document=html_file,
@@ -1002,8 +887,7 @@ async def handle_topic(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "and put the audio files from the ZIP folder into your Anki `collection.media` folder."
         )
 
-        # Send Anki import file — utf-8-sig (BOM) so Anki on Windows reads Cyrillic correctly
-        anki_file = BytesIO(vocab_content.encode('utf-8-sig'))
+        anki_file = BytesIO(vocab_content.encode('utf-8'))
         anki_file.name = "anki_import.txt"
         await update.message.reply_document(
             document=anki_file,
@@ -1022,6 +906,7 @@ async def handle_topic(update: Update, context: ContextTypes.DEFAULT_TYPE):
         file_size = zip_buffer.getbuffer().nbytes
         logger.info(f"[Bot] ✅ Successfully completed request for user {user_id}")
 
+        # Save session to disk so /speak works even after restart
         save_speaking_session(user_id, {
             "topic": topic,
             "speaking_questions": content["speaking_questions"],
@@ -1035,7 +920,7 @@ async def handle_topic(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"• Anki TTS files: {len(audio_files)}\n"
             f"• Narration audio: {len(narration_files)}\n"
             f"• ZIP size: {file_size / 1024 / 1024:.2f}MB\n\n"
-            f"💬 When you've done your Anki cards and listened to the audio, "
+            f"💬 When you\'ve done your Anki cards and listened to the audio, "
             f"send /speak to practise reacting to the ideas in the text."
         )
 
@@ -1095,7 +980,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 SPEAKING_SESSIONS_DIR = "speaking_sessions"
 
-# In-memory speaking sessions: user_id -> {questions, index, topic}
+# In-memory speaking sessions: user_id -> {questions, index, topic, collocations}
 speaking_sessions = {}
 
 def save_speaking_session(user_id: int, data: dict):
@@ -1165,7 +1050,7 @@ Student said: {user_text}
 
 Give feedback in this exact format (3 parts, keep it SHORT):
 
-1. ERROR (optional): Only mention ONE obvious grammar or vocab error if present. Skip minor issues.
+1. ERROR (optional): Only mention ONE obvious grammar or vocab error if present. Skip minor issues. 
    If no clear error, omit this line entirely.
 
 2. SCORE: X/5 — one sentence on HOW FLEXIBLY they used the target expression.
@@ -1179,7 +1064,7 @@ Give feedback in this exact format (3 parts, keep it SHORT):
 3. TIP: One concrete example showing ONE way to be more flexible with this expression.
    Choose the most natural tip based on the structure type:
    - verb phrase → try: adverb ("inevitably X"), tense shift ("had always X"), "tend to/used to X"
-   - adjective+noun → try: second adjective ("X and Y"), intensifier ("remarkably X")
+   - adjective+noun → try: second adjective ("X and Y"), intensifier ("remarkably X")  
    - prediction/possibility → try: hedging stronger/weaker ("bound to", "unlikely to", "might well")
    - noun phrase → try: specific noun replacing generic, or possessive ("my own X")
    - any structure → try: conditional ("if...then X"), negation ("far from X"), question form
@@ -1210,7 +1095,7 @@ async def speak_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not session:
         await update.message.reply_text(
             "No previous session found. Send me a topic first to generate materials, "
-            "then use /speak when you're ready to practise."
+            "then use /speak when you\'re ready to practise."
         )
         return
 
@@ -1220,7 +1105,7 @@ async def speak_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"💬 Speaking practice — {topic}\n\n"
         f"5 questions based on the text. Answer each one with a voice message.\n"
-        f"Focus on using the target expressions flexibly. Let's go! 🎤"
+        f"Focus on using the target expressions flexibly. Let\'s go! 🎤"
     )
 
     speaking_sessions[user_id] = {

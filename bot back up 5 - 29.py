@@ -104,6 +104,7 @@ async def track_usage_google_sheets(user_id, username, first_name, last_name, to
 
         sheets_client = get_sheets_client()
 
+        # Prepare data row
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         full_name = f"{first_name or ''} {last_name or ''}".strip() or "Unknown"
 
@@ -112,9 +113,10 @@ async def track_usage_google_sheets(user_id, username, first_name, last_name, to
             user_id,
             username or "No username",
             full_name,
-            topic[:50]
+            topic[:50]  # Truncate long topics
         ]]
 
+        # Append to sheet
         sheets_client.spreadsheets().values().append(
             spreadsheetId=config.TRACKING_SHEET_ID,
             range="A:E",
@@ -142,9 +144,13 @@ def validate_topic(topic):
 
 def clean_markdown_for_tts(text):
     """Remove markdown formatting for TTS while keeping content"""
+    # Remove **bold** (keep the word inside)
     text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)
+    # Remove *italic*  
     text = re.sub(r'\*(.*?)\*', r'\1', text)
+    # Remove __bold__
     text = re.sub(r'__(.*?)__', r'\1', text)
+    # Remove [text](url) - keep just the text
     text = re.sub(r'\[(.*?)\]\(.*?\)', r'\1', text)
     return text
 
@@ -152,19 +158,21 @@ def apply_html_bold_to_text(text, collocations):
     """Apply HTML <strong> tags to collocation phrases in the main text"""
     if not collocations:
         return text
-
-    # Clean any existing markdown bold from the text first
+    
+    # First, clean any existing markdown bold from the text
     text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)
-
+    
     # Sort by length (longest first) to avoid partial matches
     sorted_collocs = sorted(collocations, key=lambda x: len(x['english']), reverse=True)
-
+    
     result = text
     for item in sorted_collocs:
         phrase = item['english']
+        # Escape special regex characters
         escaped = re.escape(phrase)
+        # Replace with bolded version (case insensitive)
         result = re.sub(r'(?i)(\b' + escaped + r'\b)', r'<strong>\1</strong>', result)
-
+    
     return result
 
 def split_text_into_sentences(text, max_length=200):
@@ -204,6 +212,7 @@ def split_text_into_sentences(text, max_length=200):
 def generate_tts_chirp3_sync(text, voice_name):
     """Generate TTS using Chirp3 HD voices for main texts"""
     try:
+        # Clean markdown before TTS
         cleaned_text = clean_markdown_for_tts(text)
         logger.info(f"[Chirp3 TTS] Generating for voice '{voice_name}', text length: {len(cleaned_text)}")
         client = get_google_tts_client()
@@ -242,6 +251,7 @@ def generate_tts_chirp3_sync(text, voice_name):
 def generate_tts_wavenet_sync(text, voice_name="en-US-Wavenet-H"):
     """Generate TTS using Wavenet voices for Anki cards"""
     try:
+        # Clean markdown before TTS
         cleaned_text = clean_markdown_for_tts(text)
         logger.info(f"[Wavenet TTS] Generating for '{cleaned_text[:50]}...' with voice '{voice_name}'")
         client = get_google_tts_client()
@@ -348,7 +358,7 @@ CRITICAL REQUIREMENTS:
 5b. All opinion texts: strong B2 level — clear, direct sentences, no dense subordinate clauses, no C1+ academic vocabulary
 6. Speaking questions must each react to a DIFFERENT specific idea/claim from the main_text
 7. Each speaking question uses 1-2 collocations from the list naturally in the question itself
-8. Question patterns (vary across the 5): "Do you agree that [idea from text]?",
+8. Question patterns (vary across the 5): "Do you agree that [idea from text]?", 
    "To what extent is it true that [idea from text]?", "How far has [idea from text] been true in your experience?",
    "Would you say that [idea from text]?", "Is [idea from text] realistic in your view?"
 9. Questions should prompt a reaction to the TEXT's ideas, not tangential topics
@@ -377,80 +387,8 @@ CRITICAL REQUIREMENTS:
     logger.info(f"[DeepSeek] ✅ Content validated successfully")
     return content
 
-@retry(
-    stop=stop_after_attempt(config.API_RETRY_ATTEMPTS),
-    wait=wait_exponential(multiplier=1, min=4, max=10),
-    retry=retry_if_exception_type((Exception,)),
-    before_sleep=lambda retry_state: logger.warning(f"Retry {retry_state.attempt_number}: {retry_state.outcome.exception()}")
-)
-def generate_definitions_with_deepseek(collocations):
-    """Generate simple B1/B2 level definitions/synonyms for collocations"""
-    english_phrases = [item['english'] for item in collocations]
-    phrases_list = "\n".join(f"{i+1}. {phrase}" for i, phrase in enumerate(english_phrases))
-
-    logger.info(f"[DeepSeek] Generating definitions for {len(english_phrases)} collocations")
-
-    prompt = f"""You are an English teacher creating simple definitions for B1/B2 learners.
-
-For each phrase below, provide a SHORT definition or synonym(s) in simple English (B1/B2 level).
-
-CRITICAL RULES:
-- DO NOT use any word that appears in the target phrase itself
-- Use simpler, more common words
-- If it's a phrasal verb, explain with a single verb or short phrase
-- If it's a collocation, give 1-2 synonyms or a simple explanation
-- Keep each definition under 6 words
-- Examples:
-  "increase prices" → "raise costs"
-  "pick up a language" → "learn to speak it"
-  "look after children" → "take care of kids"
-  "make a decision" → "choose something"
-  "take into account" → "consider, think about"
-  "play a key role" → "be very important"
-  "pose a threat" → "be dangerous for"
-  "strike a balance" → "find middle ground"
-  "face challenges" → "deal with problems"
-
-Phrases to define:
-{phrases_list}
-
-Return ONLY a JSON array of definitions in the same order:
-["definition1", "definition2", ...]
-
-Return ONLY valid JSON, no other text."""
-
-    response = deepseek_client.chat.completions.create(
-        model="deepseek-chat",
-        messages=[
-            {"role": "system", "content": "You create simple B1/B2 English definitions. Always respond with valid JSON array only. Never use words from the target phrase in definitions."},
-            {"role": "user", "content": prompt}
-        ],
-        temperature=0.3,
-        timeout=45.0
-    )
-
-    content_text = response.choices[0].message.content
-
-    json_match = re.search(r'\[.*\]', content_text, re.DOTALL)
-    if json_match:
-        content_text = json_match.group()
-
-    definitions = json.loads(content_text)
-
-    if len(definitions) != len(collocations):
-        logger.warning(f"[DeepSeek] Got {len(definitions)} definitions but expected {len(collocations)}")
-        while len(definitions) < len(collocations):
-            definitions.append("")
-        definitions = definitions[:len(collocations)]
-
-    logger.info(f"[DeepSeek] ✅ Generated {len(definitions)} definitions")
-    return definitions
-
-async def create_vocabulary_file_with_tts(collocations, definitions, topic, progress_callback=None):
-    """Create Anki vocabulary file with Wavenet TTS.
-    4 columns (no header): English | Definition | Russian | [sound:xxx.mp3]
-    File is encoded as UTF-8 with BOM so Anki on Windows reads Cyrillic correctly.
-    """
+async def create_vocabulary_file_with_tts(collocations, topic, progress_callback=None):
+    """Create Anki vocabulary file with Wavenet TTS"""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     safe_topic_name = safe_filename(topic)
     filename = f"{safe_topic_name}_{timestamp}_collocations.txt"
@@ -474,8 +412,6 @@ async def create_vocabulary_file_with_tts(collocations, definitions, topic, prog
 
     for idx, (item, audio_data) in enumerate(zip(collocations, audio_results)):
         english_text = item['english']
-        russian_text = item['russian']
-        definition = definitions[idx] if idx < len(definitions) else ""
 
         if progress_callback:
             await progress_callback(idx + 1, total_items)
@@ -483,20 +419,18 @@ async def create_vocabulary_file_with_tts(collocations, definitions, topic, prog
         if isinstance(audio_data, Exception):
             logger.error(f"[Anki TTS] ❌ Exception for '{english_text}': {type(audio_data).__name__}: {audio_data}")
             failed_count += 1
-            # 4 columns, no TTS tag on failure
-            content += f"{english_text}\t{definition}\t{russian_text}\t\n"
+            content += f"{item['russian']}\t{item['english']}\n"
         elif not audio_data:
             logger.error(f"[Anki TTS] ❌ Empty data for '{english_text}'")
             failed_count += 1
-            content += f"{english_text}\t{definition}\t{russian_text}\t\n"
+            content += f"{item['russian']}\t{item['english']}\n"
         else:
-            hash_object = hashlib.md5(english_text.encode('utf-8'))
+            hash_object = hashlib.md5(english_text.encode())
             audio_filename = f"tts_{hash_object.hexdigest()}.mp3"
             audio_filename = safe_filename(audio_filename)
             audio_files[audio_filename] = audio_data
             anki_tag = f"[sound:{audio_filename}]"
-            # 4 columns: English | Definition | Russian | TTS tag
-            content += f"{english_text}\t{definition}\t{russian_text}\t{anki_tag}\n"
+            content += f"{item['russian']}\t{item['english']}\t{anki_tag}\n"
             success_count += 1
             logger.info(f"[Anki TTS] ✅ {idx+1}/{total_items}: '{english_text[:30]}' -> {audio_filename}")
 
@@ -507,10 +441,8 @@ async def create_vocabulary_file_with_tts(collocations, definitions, topic, prog
 
     return filename, content, audio_files
 
-def create_zip_package(vocab_filename, vocab_content, audio_files, html_filename, html_output, topic, timestamp):
-    """Create ZIP with all files.
-    vocab_content is encoded as UTF-8-sig (BOM) so Anki reads Cyrillic correctly on Windows.
-    """
+def create_zip_package(vocab_filename, vocab_content, audio_files, html_filename, html_content, topic, timestamp):
+    """Create ZIP with all files"""
     safe_topic_name = safe_filename(topic)
     zip_filename = f"{safe_topic_name}_{timestamp}_complete_package.zip"
     zip_buffer = BytesIO()
@@ -519,8 +451,7 @@ def create_zip_package(vocab_filename, vocab_content, audio_files, html_filename
 
     with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
         safe_vocab = safe_filename(vocab_filename)
-        # utf-8-sig = UTF-8 with BOM — Anki and Excel on Windows will detect encoding correctly
-        zip_file.writestr(safe_vocab, vocab_content.encode('utf-8-sig'))
+        zip_file.writestr(safe_vocab, vocab_content.encode('utf-8'))
         logger.info(f"[ZIP] Added vocabulary file: {safe_vocab}")
 
         for audio_filename, audio_data in audio_files.items():
@@ -529,7 +460,7 @@ def create_zip_package(vocab_filename, vocab_content, audio_files, html_filename
         logger.info(f"[ZIP] Added {len(audio_files)} Anki TTS audio files")
 
         safe_html = safe_filename(html_filename)
-        zip_file.writestr(safe_html, html_output.encode('utf-8'))
+        zip_file.writestr(safe_html, html_content.encode('utf-8'))
         logger.info(f"[ZIP] Added HTML file: {safe_html}")
 
     zip_buffer.seek(0)
@@ -541,34 +472,30 @@ def create_zip_package(vocab_filename, vocab_content, audio_files, html_filename
 
     return zip_filename, zip_buffer
 
-def create_html_document(topic, content, timestamp, definitions):
-    """Create HTML document.
-    Table has 4 columns: # | English | Simple definition | Russian
-    Collocations in the main text are bolded via <strong> tags.
-    """
+def create_html_document(topic, content, timestamp):
+    """Create HTML document with bold styling for collocations in main text"""
     safe_topic = safe_filename(topic)
     html_filename = f"{safe_topic}_{timestamp}_materials.html"
 
+    # Apply HTML bold to collocations in the main text
     main_text_bolded = apply_html_bold_to_text(content['main_text'], content['collocations'])
-
+    
+    # Also clean opinion texts (they don't need bold styling, just clean text)
     positive_cleaned = clean_markdown_for_tts(content['opinion_texts']['positive'])
     negative_cleaned = clean_markdown_for_tts(content['opinion_texts']['negative'])
     mixed_cleaned = clean_markdown_for_tts(content['opinion_texts']['mixed'])
 
-    # Build vocabulary table rows — 4 columns: #, English, Definition, Russian
     vocab_rows = ""
     for i, item in enumerate(content['collocations'], 1):
-        definition = definitions[i-1] if i-1 < len(definitions) else ""
         vocab_rows += f"""
         <tr>
             <td>{i}</td>
             <td class="english">{item['english']}</td>
-            <td class="definition">{definition}</td>
             <td class="russian">{item['russian']}</td>
         </tr>
         """
 
-    html_output = f"""<!DOCTYPE html>
+    html_content = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -650,10 +577,6 @@ def create_html_document(topic, content, timestamp, definitions):
             font-size: 1.1em;
             font-weight: 600;
             color: #2c3e50;
-        }}
-        .definition {{
-            color: #495057;
-            font-size: 0.95em;
         }}
         .russian {{
             color: #7f8c8d;
@@ -759,14 +682,13 @@ def create_html_document(topic, content, timestamp, definitions):
             <div class="section">
                 <h2 class="section-title">
                     <span class="section-icon">📚</span>
-                    Collocations &amp; Phrasal Verbs
+                    Collocations & Phrasal Verbs
                 </h2>
                 <table>
                     <thead>
                         <tr>
                             <th>#</th>
                             <th>English</th>
-                            <th>Simple definition / Similar words</th>
                             <th>Russian (Русский)</th>
                         </tr>
                     </thead>
@@ -821,7 +743,7 @@ def create_html_document(topic, content, timestamp, definitions):
 </html>"""
 
     logger.info(f"[HTML] Created document: {html_filename}")
-    return html_filename, html_output
+    return html_filename, html_content
 
 # Chirp3 HD voices for narration
 CHIRP_VOICES = [
@@ -871,17 +793,17 @@ async def handle_topic(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.chat.send_action(action="typing")
     progress_msg = await update.message.reply_text(
         f"📚 Materials for your '{topic[:20]}...'...\n\n"
-        f"⏳ Progress: 0/6\n"
-        f"⬜⬜⬜⬜⬜⬜\n"
+        f"⏳ Progress: 0/5\n"
+        f"⬜⬜⬜⬜⬜\n"
         f"Initializing..."
     )
 
     async def update_progress(step, message):
-        progress_bar = "🟩" * step + "⬜" * (6 - step)
+        progress_bar = "🟩" * step + "⬜" * (5 - step)
         try:
             await progress_msg.edit_text(
                 f"📚 Materials for your '{topic[:20]}...'...\n\n"
-                f"⏳ Progress: {step}/6\n"
+                f"⏳ Progress: {step}/5\n"
                 f"{progress_bar}\n"
                 f"{message}"
             )
@@ -900,23 +822,17 @@ async def handle_topic(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Failed to generate content. Please try again.")
             return
 
-        await update_progress(2, "📝 Generating B1/B2 definitions...")
-        await update.message.chat.send_action(action="typing")
-
-        logger.info(f"[Bot] Generating definitions for {len(content['collocations'])} collocations")
-        definitions = generate_definitions_with_deepseek(content['collocations'])
-        logger.info(f"[Bot] ✅ Definitions generated: {len(definitions)}")
-
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         safe_topic = safe_filename(topic)
 
-        await update_progress(3, "📄 Creating HTML document...")
-        html_filename, html_output = create_html_document(topic, content, timestamp, definitions)
+        await update_progress(2, "📄 Creating HTML document...")
+        html_filename, html_content = create_html_document(topic, content, timestamp)
         logger.info(f"[Bot] HTML document created: {html_filename}")
 
-        await update_progress(4, "🎧 Generating narration audio (Chirp3 HD)...")
+        await update_progress(3, "🎧 Generating narration audio (Chirp3 HD)...")
         await update.message.chat.send_action(action="record_voice")
 
+        # Clean markdown from all texts before TTS
         main_text_cleaned = clean_markdown_for_tts(content['main_text'])
         positive_cleaned = clean_markdown_for_tts(content['opinion_texts']['positive'])
         negative_cleaned = clean_markdown_for_tts(content['opinion_texts']['negative'])
@@ -951,15 +867,15 @@ async def handle_topic(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 logger.error(f"[Bot] ❌ Chirp3 TTS failed for {filename}: {audio_data}")
 
-        await update_progress(5, "🎵 Generating TTS for Anki collocations (Wavenet-H)...")
+        await update_progress(4, "🎵 Generating TTS for Anki collocations (Wavenet-H)...")
         await update.message.chat.send_action(action="record_voice")
 
         async def vocab_progress(current, total):
             if current % 3 == 0:
-                await update_progress(5, f"🎵 Generating Anki TTS... ({current}/{total})")
+                await update_progress(4, f"🎵 Generating Anki TTS... ({current}/{total})")
 
         vocab_filename, vocab_content, audio_files = await create_vocabulary_file_with_tts(
-            content['collocations'], definitions, safe_topic, progress_callback=vocab_progress
+            content['collocations'], safe_topic, progress_callback=vocab_progress
         )
 
         if not audio_files:
@@ -968,14 +884,13 @@ async def handle_topic(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             logger.info(f"[Bot] ✅ Generated {len(audio_files)} Anki TTS files")
 
-        await update_progress(6, "📦 Creating ZIP package...")
+        await update_progress(5, "📦 Creating ZIP package...")
         zip_filename, zip_buffer = create_zip_package(
-            vocab_filename, vocab_content, audio_files, html_filename, html_output, topic, timestamp
+            vocab_filename, vocab_content, audio_files, html_filename, html_content, topic, timestamp
         )
         logger.info(f"[Bot] ZIP package created: {zip_filename}")
 
-        # Send HTML document
-        html_file = BytesIO(html_output.encode('utf-8'))
+        html_file = BytesIO(html_content.encode('utf-8'))
         html_file.name = html_filename
         await update.message.reply_document(
             document=html_file,
@@ -1002,8 +917,7 @@ async def handle_topic(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "and put the audio files from the ZIP folder into your Anki `collection.media` folder."
         )
 
-        # Send Anki import file — utf-8-sig (BOM) so Anki on Windows reads Cyrillic correctly
-        anki_file = BytesIO(vocab_content.encode('utf-8-sig'))
+        anki_file = BytesIO(vocab_content.encode('utf-8'))
         anki_file.name = "anki_import.txt"
         await update.message.reply_document(
             document=anki_file,
@@ -1022,6 +936,7 @@ async def handle_topic(update: Update, context: ContextTypes.DEFAULT_TYPE):
         file_size = zip_buffer.getbuffer().nbytes
         logger.info(f"[Bot] ✅ Successfully completed request for user {user_id}")
 
+        # Save session to disk so /speak works even after restart
         save_speaking_session(user_id, {
             "topic": topic,
             "speaking_questions": content["speaking_questions"],
@@ -1095,7 +1010,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 SPEAKING_SESSIONS_DIR = "speaking_sessions"
 
-# In-memory speaking sessions: user_id -> {questions, index, topic}
+# In-memory speaking sessions: user_id -> {questions, index, topic, collocations}
 speaking_sessions = {}
 
 def save_speaking_session(user_id: int, data: dict):
@@ -1165,7 +1080,7 @@ Student said: {user_text}
 
 Give feedback in this exact format (3 parts, keep it SHORT):
 
-1. ERROR (optional): Only mention ONE obvious grammar or vocab error if present. Skip minor issues.
+1. ERROR (optional): Only mention ONE obvious grammar or vocab error if present. Skip minor issues. 
    If no clear error, omit this line entirely.
 
 2. SCORE: X/5 — one sentence on HOW FLEXIBLY they used the target expression.
@@ -1179,7 +1094,7 @@ Give feedback in this exact format (3 parts, keep it SHORT):
 3. TIP: One concrete example showing ONE way to be more flexible with this expression.
    Choose the most natural tip based on the structure type:
    - verb phrase → try: adverb ("inevitably X"), tense shift ("had always X"), "tend to/used to X"
-   - adjective+noun → try: second adjective ("X and Y"), intensifier ("remarkably X")
+   - adjective+noun → try: second adjective ("X and Y"), intensifier ("remarkably X")  
    - prediction/possibility → try: hedging stronger/weaker ("bound to", "unlikely to", "might well")
    - noun phrase → try: specific noun replacing generic, or possessive ("my own X")
    - any structure → try: conditional ("if...then X"), negation ("far from X"), question form
